@@ -1,3 +1,5 @@
 *.exe
 .vscode
 test.*
+.gitclone
+.ignore.txt

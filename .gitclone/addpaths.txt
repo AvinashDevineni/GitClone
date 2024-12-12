@@ -1,6 +1,0 @@
-C:\Users\devin\_ProgrammingProjects\C++\_GitClone\.ignore.txt
-C:\Users\devin\_ProgrammingProjects\C++\_GitClone\filereading.cpp
-C:\Users\devin\_ProgrammingProjects\C++\_GitClone\filereading.hpp
-C:\Users\devin\_ProgrammingProjects\C++\_GitClone\gitclone.cmd
-C:\Users\devin\_ProgrammingProjects\C++\_GitClone\gitclone.cpp
-C:\Users\devin\_ProgrammingProjects\C++\_GitClone\gitclone.exe

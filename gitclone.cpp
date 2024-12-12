@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 #include <unordered_set>
+#include <functional>
 
 const char* name = "gitclone";
 const char* version = "0.0.1";
@@ -40,6 +41,20 @@ std::unordered_set<std::string> tryReadIgnoreFile(const std::string& CWD) {
 
     ignoreFile.close();
     return ignorePaths;
+}
+
+void addFilePathsInDirToFolder(const std::string* dirPath, std::ofstream& outFile,
+                               std::function<bool(std::string&)> shouldIgnoreFile) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(*dirPath)) {
+        if (entry.is_directory())
+            continue;
+        
+        std::string path = entry.path().string();
+        if (shouldIgnoreFile(path))
+            continue;
+
+        outFile << path << "\n";
+    }
 }
 
 bool isCwdInitialized(const std::string& CWD) {
@@ -79,31 +94,25 @@ int main(int argc, char ** argv) {
             addFile.open(ADD_PATH);
         else addFile.open(ADD_PATH, std::ios_base::app);
 
+        const auto ignoredPaths = tryReadIgnoreFile(CWD);
+
         // adding all files to add file
         if (SHOULD_ADD_ALL) {
-            auto ignoredPaths = tryReadIgnoreFile(CWD);
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(CWD)) {
-                if (entry.is_directory())
-                    continue;
-                
-                const std::string PATH = entry.path().string();
+            addFilePathsInDirToFolder(&CWD, addFile, [DATA_PATH, ignoredPaths, CWD](std::string& PATH) -> bool{
                 // PATH starts with DATA_PATH
                 if (PATH.find(DATA_PATH) == 0)
-                    continue;
+                    return true;
 
                 bool isIgnored = false;
                 for (const auto& ignoredPath : ignoredPaths) {
                     if (PATH.find(CWD + "\\" + ignoredPath) == 0) {
                         isIgnored = true;
-                        break;
+                        return true;
                     }
                 }
 
-                if (isIgnored)
-                    continue;
-
-                addFile << PATH << "\n";
-            }
+                return false;
+            });
         }
 
         else {
@@ -112,7 +121,6 @@ int main(int argc, char ** argv) {
                     argv[2][i] = '\\';
             }
 
-            auto ignoredPaths = tryReadIgnoreFile(CWD);
             bool isIgnored = false;
             for (const auto& ignoredPath : ignoredPaths) {
                 if (std::string(argv[2]).find(ignoredPath) == 0) {
@@ -126,7 +134,26 @@ int main(int argc, char ** argv) {
                 return 1;
             }
 
-            addFile << CWD + "\\" + argv[2] << "\n";
+            const std::string ignorePath = CWD + "\\" + argv[2];
+            if (std::filesystem::is_directory(ignorePath)) {
+                addFilePathsInDirToFolder(&ignorePath, addFile, [DATA_PATH, ignoredPaths, CWD](std::string& PATH) -> bool{
+                    // PATH starts with DATA_PATH
+                    if (PATH.find(DATA_PATH) == 0)
+                        return true;
+
+                    bool isIgnored = false;
+                    for (const auto& ignoredPath : ignoredPaths) {
+                        if (PATH.find(CWD + "\\" + ignoredPath) == 0) {
+                            isIgnored = true;
+                            return true;
+                        }
+                    }
+
+                    return false;
+                });
+            }
+
+            else addFile << CWD + "\\" + argv[2] << "\n";
         }
     }
 
