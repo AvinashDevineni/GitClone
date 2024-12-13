@@ -11,17 +11,31 @@
 constexpr char* name = "gitclone";
 constexpr char* version = "0.0.1";
 
-std::unordered_set<std::string> tryReadFile(const std::string& PATH) {
-    std::ifstream ignoreFile(PATH);
-    if (!ignoreFile)
+std::unordered_set<std::string> tryReadFileUniqueNoOrder(const std::string& PATH) {
+    std::ifstream file(PATH);
+    if (!file)
         return {};
 
     std::unordered_set<std::string> ignorePaths;
     std::string line;
-    while (std::getline(ignoreFile, line))
+    while (std::getline(file, line))
         ignorePaths.insert(line);
 
-    ignoreFile.close();
+    file.close();
+    return ignorePaths;
+}
+
+std::vector<std::string> tryReadFile(const std::string& PATH) {
+    std::ifstream file(PATH);
+    if (!file)
+        return {};
+
+    std::vector<std::string> ignorePaths;
+    std::string line;
+    while (std::getline(file, line))
+        ignorePaths.push_back(line);
+
+    file.close();
     return ignorePaths;
 }
 
@@ -69,7 +83,7 @@ int main(int argc, char ** argv) {
 
     // commands that don't need repo to be initialized
     if (strcmp("init", CMD) == 0) {
-        std::filesystem::create_directory(DATA_PATH_REL);
+        std::filesystem::create_directory(DATA_PATH_ABS);
         return 0;
     }
 
@@ -90,7 +104,7 @@ int main(int argc, char ** argv) {
             addFile.open(ADD_PATH_ABS);
         else addFile.open(ADD_PATH_ABS, std::ios_base::app);
 
-        const auto ignoredPaths = tryReadFile(IGNORE_PATH_ABS);
+        const auto ignoredPaths = tryReadFileUniqueNoOrder(IGNORE_PATH_ABS);
 
         // handling adding all files to add file
         if (SHOULD_ADD_ALL) {
@@ -197,10 +211,19 @@ int main(int argc, char ** argv) {
         std::filesystem::create_directory(SAVE_PATH_ABS);
 
         const auto CWD_LEN = CWD.length();
-        const auto addedPaths = tryReadFile(ADD_PATH_ABS);
-        std::ofstream test(SAVE_PATH_ABS + "\\" + "test.txt");
+        const auto addedPaths = tryReadFileUniqueNoOrder(ADD_PATH_ABS);
         for (const auto& addedPath : addedPaths) {
-            test << addedPath << "\n";
+            const std::string sourcePath = CWD + "\\" + addedPath;
+            const std::string targetPath = SAVE_PATH_ABS + "\\" + addedPath;
+            std::ofstream outFile(targetPath);
+            if (!outFile) {
+                std::cerr << "Error " << addedPath;
+                return 1;
+            }
+
+            for (auto line : tryReadFile(sourcePath))
+                outFile << line << "\n";
+            outFile.close();
         }
     }
 
