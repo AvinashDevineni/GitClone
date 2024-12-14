@@ -11,17 +11,31 @@
 constexpr char* name = "gitclone";
 constexpr char* version = "0.0.1";
 
-std::unordered_set<std::string> tryReadFile(const std::string& PATH) {
-    std::ifstream ignoreFile(PATH);
-    if (!ignoreFile)
+std::unordered_set<std::string> tryReadFileUniqueNoOrder(const std::string& PATH) {
+    std::ifstream file(PATH);
+    if (!file)
         return {};
 
     std::unordered_set<std::string> ignorePaths;
     std::string line;
-    while (std::getline(ignoreFile, line))
+    while (std::getline(file, line))
         ignorePaths.insert(line);
 
-    ignoreFile.close();
+    file.close();
+    return ignorePaths;
+}
+
+std::vector<std::string> tryReadFile(const std::string& PATH) {
+    std::ifstream file(PATH);
+    if (!file)
+        return {};
+
+    std::vector<std::string> ignorePaths;
+    std::string line;
+    while (std::getline(file, line))
+        ignorePaths.push_back(line);
+
+    file.close();
     return ignorePaths;
 }
 
@@ -69,7 +83,7 @@ int main(int argc, char ** argv) {
 
     // commands that don't need repo to be initialized
     if (strcmp("init", CMD) == 0) {
-        std::filesystem::create_directory(DATA_PATH_REL);
+        std::filesystem::create_directory(DATA_PATH_ABS);
         return 0;
     }
 
@@ -78,21 +92,17 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // commands that need repo to be initialized
+    // commands that need/should have initialized repo
     if (strcmp("add", CMD) == 0) {
         const bool SHOULD_ADD_ALL = argc == 2 || strcmp(argv[2], "all") == 0;
         std::ofstream addFile;
 
-        // initializing add file to write or append
-        // depending on if we are adding everything
-        // or if the file already exists or doesn't exist
         if (SHOULD_ADD_ALL || !std::filesystem::exists(ADD_PATH_ABS.c_str()))
-            addFile.open(ADD_PATH_ABS);
-        else addFile.open(ADD_PATH_ABS, std::ios_base::app);
+            addFile.open(ADD_PATH_ABS, std::ios::out);
+        else addFile.open(ADD_PATH_ABS, std::ios::app);
 
-        const auto ignoredPaths = tryReadFile(IGNORE_PATH_ABS);
+        const auto ignoredPaths = tryReadFileUniqueNoOrder(IGNORE_PATH_ABS);
 
-        // handling adding all files to add file
         if (SHOULD_ADD_ALL) {
             addFilePathsInDirToFolder(&CWD, addFile, [DATA_PATH_REL, ignoredPaths, CWD](std::string& PATH) -> bool{
                 // PATH starts with DATA_PATH
@@ -114,11 +124,14 @@ int main(int argc, char ** argv) {
         }
 
         else {
-            // is this needed?
             for (int i = 0; argv[2][i] != '\0'; i++) {
                 if (argv[2][i] == '/')
                     argv[2][i] = '\\';
             }
+
+            // "removing" first character if it is "\"
+            if (argv[2][0] == '\\')
+                argv[2] = argv[2] + 1;
 
             bool isIgnored = false;
             for (const auto& ignoredPath : ignoredPaths) {
@@ -154,7 +167,8 @@ int main(int argc, char ** argv) {
                 });
             }
 
-            else addFile << argv[2] << "\n";
+            // making path relative in case it was entered as absolute
+            else addFile << std::filesystem::path(argv[2]).lexically_relative(CWD).string() << "\n";
         }
     }
 
@@ -185,22 +199,63 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        // 1. create saves folder if not present
-        // 2. create folder with number representing current save
-        // 3. add added files to folder
-
         if (!std::filesystem::exists(SAVES_PATH_ABS.c_str()))
             std::filesystem::create_directory(SAVES_PATH_ABS);
 
-        const auto time = std::chrono::system_clock::now();
-        const std::string SAVE_PATH_ABS = SAVES_PATH_ABS + "\\" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(time.time_since_epoch()).count());
+        const std::string time = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+        const std::string SAVE_PATH_ABS = SAVES_PATH_ABS + "\\" + time;
         std::filesystem::create_directory(SAVE_PATH_ABS);
 
+        std::ofstream saveMetadataFile(SAVE_PATH_ABS + "\\." + name + ".savedata.txt");
+        saveMetadataFile << argv[2] << "\n" << time;
+
         const auto CWD_LEN = CWD.length();
-        const auto addedPaths = tryReadFile(ADD_PATH_ABS);
-        std::ofstream test(SAVE_PATH_ABS + "\\" + "test.txt");
+        const auto addedPaths = tryReadFileUniqueNoOrder(ADD_PATH_ABS);
         for (const auto& addedPath : addedPaths) {
-            test << addedPath << "\n";
+            const std::string sourcePath = CWD + "\\" + addedPath;
+            const std::string targetPath = SAVE_PATH_ABS + "\\" + addedPath;
+
+            if (std::filesystem::is_directory(sourcePath)) {
+                std::filesystem::create_directories(targetPath);
+                for (const auto& path : std::filesystem::recursive_directory_iterator(sourcePath)) {
+                    const auto pathStr = path.path().lexically_relative(CWD).string();
+
+                    if (path.is_directory())
+                        std::filesystem::create_directories(SAVE_PATH_ABS + pathStr);
+
+                    else {
+                        std::cout << "Creating file at " << SAVE_PATH_ABS + "\\" + pathStr;
+
+                        std::ofstream outFile(SAVE_PATH_ABS + "\\" + pathStr);
+                        if (!outFile) {
+                            std::cerr << "Error " << addedPath;
+                            return 1;
+                        }
+
+                        for (const auto& line : tryReadFile(sourcePath))
+                            outFile << line << "\n";
+                        outFile.close();
+                    }
+                }
+            }
+
+            else {
+                // if path is in a directory, create it
+                const auto index = addedPath.find_last_of("\\");
+                if (index != std::string::npos) {
+                    std::filesystem::create_directories(SAVE_PATH_ABS + "\\" + addedPath.substr(0, index));
+                }
+
+                std::ofstream outFile(targetPath);
+                if (!outFile) {
+                    std::cerr << "Error " << addedPath;
+                    return 1;
+                }
+
+                for (const auto& line : tryReadFile(sourcePath))
+                    outFile << line << "\n";
+                outFile.close();
+            }
         }
     }
 
