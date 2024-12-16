@@ -55,6 +55,50 @@ void addFilePathsInDirToFolder(const std::string* dirPath, std::ofstream& outFil
     }
 }
 
+template <typename container>
+void copyFilesRelatively(container& sourcePaths, const std::string& parentPath, const std::string& targetPath) {
+    for (const std::string& path : sourcePaths) {
+        const std::string relPath = std::filesystem::path(path).lexically_relative(parentPath).string();
+        const std::string sourcePath = parentPath + "\\" + relPath;
+        const std::string finalPath = targetPath + "\\" + relPath;
+
+        if (std::filesystem::is_directory(sourcePath)) {
+            std::filesystem::create_directories(finalPath);
+            for (const auto& path : std::filesystem::recursive_directory_iterator(sourcePath)) {
+                const auto pathStr = path.path().lexically_relative(sourcePath).string();
+                std::cout << pathStr << std::endl;
+
+                if (path.is_directory())
+                    std::filesystem::create_directories(finalPath + '\\' + pathStr);
+
+                else {
+                    std::ofstream outFile(finalPath + "\\" + pathStr);
+                    for (const auto& line : tryReadFile(sourcePath + '\\' + pathStr))
+                        outFile << line << "\n";
+                    outFile.close();
+                }
+            }
+        }
+
+        else {
+            // if path is in a directory, create it
+            const int idx = relPath.find('\\');
+            const bool isInDir = idx != std::string::npos;
+            if (isInDir) {
+                std::cout << relPath << " is in dir" << std::endl;
+                std::filesystem::create_directories(targetPath + '\\' + relPath.substr(0, idx));
+            }
+
+            std::cout << "Created dir" << std::endl;
+
+            std::ofstream outFile(finalPath);
+            for (const auto& line : tryReadFile(sourcePath))
+                outFile << line << "\n";
+            outFile.close();
+        }
+    }
+}
+
 bool isCwdInitialized(const std::string& CWD) {
     struct stat _;
     const std::string DATA_PATH = CWD + "\\." + name;
@@ -101,25 +145,25 @@ int main(int argc, char ** argv) {
             addFile.open(ADD_PATH_ABS, std::ios::out);
         else addFile.open(ADD_PATH_ABS, std::ios::app);
 
-        const auto ignoredPaths = tryReadFileUniqueNoOrder(IGNORE_PATH_ABS);
+        std::vector<std::string> ignoredPaths;
+        for (const auto& ignoredPath : tryReadFileUniqueNoOrder(IGNORE_PATH_ABS))
+            ignoredPaths.push_back(CWD + '\\' + ignoredPath);
 
         if (SHOULD_ADD_ALL) {
-            addFilePathsInDirToFolder(&CWD, addFile, [DATA_PATH_REL, ignoredPaths, CWD](std::string& PATH) -> bool{
+            addFilePathsInDirToFolder(&CWD, addFile, [DATA_PATH_ABS, ignoredPaths, CWD](std::string& PATH) -> bool{
                 // PATH starts with DATA_PATH
-                if (PATH.find(DATA_PATH_REL) == 0)
+                if (PATH.find(DATA_PATH_ABS) == 0)
                     return true;
 
-                bool isIgnored = false;
                 for (const auto& ignoredPath : ignoredPaths) {
-                    if (PATH.find(ignoredPath) == 0) {
-                        isIgnored = true;
+                    std::cout << ignoredPath << std::endl;
+                    if (PATH.find(ignoredPath) == 0)
                         return true;
-                    }
                 }
 
                 return false;
             }, [CWD](std::filesystem::path& PATH) -> std::string{
-                return PATH.lexically_proximate(CWD).string();
+                return PATH.string();
             });
         }
 
@@ -163,12 +207,16 @@ int main(int argc, char ** argv) {
 
                     return false;
                 }, [CWD](std::filesystem::path& PATH) -> std::string{
-                    return PATH.lexically_proximate(CWD).string();
+                    return PATH.string();
                 });
             }
 
-            // making path relative in case it was entered as absolute
-            else addFile << std::filesystem::path(argv[2]).lexically_relative(CWD).string() << "\n";
+            else {
+                // making path absolute in case it was entered as absolute
+                if (std::filesystem::path(argv[2]).is_absolute())
+                    addFile << argv[2] << "\n";
+                else addFile << CWD + argv[2] << "\n";
+            }
         }
     }
 
@@ -184,7 +232,6 @@ int main(int argc, char ** argv) {
         }
 
         std::ofstream ignoreFile;
-
         if (!std::filesystem::exists(IGNORE_PATH_ABS.c_str()))
             ignoreFile.open(IGNORE_PATH_ABS);
         else ignoreFile.open(IGNORE_PATH_ABS, std::ios_base::app);
@@ -210,52 +257,37 @@ int main(int argc, char ** argv) {
         saveMetadataFile << argv[2] << "\n" << time;
 
         const auto CWD_LEN = CWD.length();
-        const auto addedPaths = tryReadFileUniqueNoOrder(ADD_PATH_ABS);
-        for (const auto& addedPath : addedPaths) {
-            const std::string sourcePath = CWD + "\\" + addedPath;
-            const std::string targetPath = SAVE_PATH_ABS + "\\" + addedPath;
+        auto addedPaths = tryReadFileUniqueNoOrder(ADD_PATH_ABS);
+        copyFilesRelatively(addedPaths, CWD, SAVE_PATH_ABS);
+    }
 
-            if (std::filesystem::is_directory(sourcePath)) {
-                std::filesystem::create_directories(targetPath);
-                for (const auto& path : std::filesystem::recursive_directory_iterator(sourcePath)) {
-                    const auto pathStr = path.path().lexically_relative(CWD).string();
+    else if (strcmp("revert", CMD) == 0) {
+        if (!std::filesystem::exists(SAVES_PATH_ABS)) {
+            std::cerr << "No saves have been created, so there is nothing to revert to";
+            return 1;
+        }
 
-                    if (path.is_directory())
-                        std::filesystem::create_directories(SAVE_PATH_ABS + pathStr);
-
-                    else {
-                        std::cout << "Creating file at " << SAVE_PATH_ABS + "\\" + pathStr;
-
-                        std::ofstream outFile(SAVE_PATH_ABS + "\\" + pathStr);
-                        if (!outFile) {
-                            std::cerr << "Error " << addedPath;
-                            return 1;
-                        }
-
-                        for (const auto& line : tryReadFile(sourcePath))
-                            outFile << line << "\n";
-                        outFile.close();
-                    }
-                }
+        if (argc == 2) {
+            long long latestTime = -1;
+            for (const auto& path : std::filesystem::directory_iterator(SAVES_PATH_ABS)) {
+                const auto pathStr = path.path().string();
+                const auto saveFileName = pathStr.substr(pathStr.find_last_of('\\') + 1);
+                
+                long long saveTime = std::stoll(saveFileName);
+                if (saveTime > latestTime)
+                    latestTime = saveTime;
             }
 
-            else {
-                // if path is in a directory, create it
-                const auto index = addedPath.find_last_of("\\");
-                if (index != std::string::npos) {
-                    std::filesystem::create_directories(SAVE_PATH_ABS + "\\" + addedPath.substr(0, index));
-                }
+            const std::string latestSavePath = SAVES_PATH_ABS + "\\" + std::to_string(latestTime);
 
-                std::ofstream outFile(targetPath);
-                if (!outFile) {
-                    std::cerr << "Error " << addedPath;
-                    return 1;
-                }
-
-                for (const auto& line : tryReadFile(sourcePath))
-                    outFile << line << "\n";
-                outFile.close();
+            std::vector<std::string> pathsInSave;
+            for (const auto& path : std::filesystem::recursive_directory_iterator(latestSavePath)) {
+                if (path.is_directory())
+                    continue;
+                pathsInSave.push_back(path.path().string());
             }
+
+            copyFilesRelatively(pathsInSave, latestSavePath, CWD);
         }
     }
 
